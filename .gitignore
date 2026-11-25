@@ -1,3 +1,8 @@
 __pycache__/
 *.pyc
 Carla_*.tmp/
+
+# Presets are personal (absolute paths to third-party models/IRs); they live in
+# ~/.local/state/aida-x/presets/ and must not be committed.
+*.carxs
+*.guitar.json
