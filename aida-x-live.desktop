@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AIDA-X Live
+Comment=AIDA-X amp sim in Carla, scriptable via aida-x-ctl
+Exec=sh -c '"$HOME/.local/bin/aida-x-live"'
+Icon=audio-card
+Categories=Audio;AudioVideo;Music;
+Terminal=false

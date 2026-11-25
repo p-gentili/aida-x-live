@@ -1,0 +1,65 @@
+#!/bin/bash
+# Run AIDA-X (LV2) inside Carla's engine under PipeWire-JACK, wire it to the
+# audio interface, expose a control socket (see aida-x-ctl) and open the
+# preset picker.
+#   aida-x-live [--headless] [--no-picker] [--preset NAME] [--model F --cab F]
+# If it's already running, this just opens the picker.
+# Override devices with AIDA_X_IN / AIDA_X_OUT (see `pw-link -o` / `pw-link -i`).
+set -u
+HERE="$(dirname "$(readlink -f "$0")")"
+SOCK="$HOME/.local/state/aida-x/carla.sock"
+IN="${AIDA_X_IN:-alsa_input.usb-IK_Multimedia_iRig_HD_2-00.mono-fallback:capture_MONO}"
+OUT="${AIDA_X_OUT:-alsa_output.usb-IK_Multimedia_iRig_HD_2-00.analog-stereo}"
+# pw-jack clients ignore PIPEWIRE_QUANTUM; PIPEWIRE_LATENCY is what sets the block size.
+export PIPEWIRE_LATENCY="${PIPEWIRE_LATENCY:-128/48000}"
+
+picker=1; args=()
+for a in "$@"; do
+  case "$a" in
+    --no-picker) picker=0 ;;
+    --headless) picker=0; args+=("$a") ;;
+    *) args+=("$a") ;;
+  esac
+done
+
+open_picker() {
+  # sway/GTK: a second launch of the same app id just raises the existing window
+  [ "$picker" = 1 ] && setsid "$HERE/aida-x-presets" >/dev/null 2>&1 &
+}
+
+if "$HERE/aida-x-ctl" presets >/dev/null 2>&1; then
+  echo "aida-x-live: already running; opening the preset picker" >&2
+  open_picker; exit 0
+fi
+
+pw-jack python3 "$HERE/aida-x-carla.py" "${args[@]}" &
+pid=$!
+trap 'kill $pid 2>/dev/null' EXIT INT TERM
+
+# Wait for the control socket, then find our ports. PipeWire may prefix the
+# client name (e.g. "Carla-AIDA-X.111/AIDA-X"), so match on the suffix.
+for _ in $(seq 50); do [ -S "$SOCK" ] && "$HERE/aida-x-ctl" presets >/dev/null 2>&1 && break; sleep 0.2; done
+port=""
+for _ in $(seq 25); do
+  port=$(pw-link -i | grep -E '(^|/)AIDA-X:Audio Input 1$' | head -1)
+  [ -n "$port" ] && break; sleep 0.2
+done
+client="${port%:Audio Input 1}"
+
+if [ -z "$client" ]; then
+  echo "aida-x-live: AIDA-X ports not found; leaving it unconnected" >&2
+else
+  # Drop whatever PipeWire auto-connected, then wire to the interface.
+  pw-link -l | awk -v c="$client:" 'index($0,c)==1{p=$0;next} /^ *\|->/{if(p){sub(/^ *\|-> /,""); print p"\t"$0}} /^[^ ]/{p=""}' |
+    while IFS=$'\t' read -r a b; do pw-link -d "$a" "$b" 2>/dev/null || true; done
+  if pw-link -o | grep -qxF "$IN"; then
+    pw-link "$IN" "$client:Audio Input 1" || true
+    pw-link "$client:Audio Output 1" "$OUT:playback_FL" || true
+    pw-link "$client:Audio Output 1" "$OUT:playback_FR" || true
+  else
+    echo "aida-x-live: input $IN not found; leaving AIDA-X unconnected" >&2
+  fi
+fi
+
+open_picker
+wait $pid

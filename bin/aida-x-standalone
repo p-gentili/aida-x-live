@@ -1,0 +1,17 @@
+#!/bin/bash
+# Start AIDA-X via PipeWire-JACK at low latency and wire it to the iRig HD 2 if present.
+IN="alsa_input.usb-IK_Multimedia_iRig_HD_2-00.mono-fallback:capture_MONO"
+OUT="alsa_output.usb-IK_Multimedia_iRig_HD_2-00.analog-stereo"
+export PIPEWIRE_QUANTUM="${PIPEWIRE_QUANTUM:-128/48000}"
+pw-jack "$HOME/.local/opt/AIDA-X/AIDA-X" "$@" &
+pid=$!
+if pw-link -o | grep -qx "$IN"; then
+  for _ in $(seq 50); do pw-link -i | grep -q '^AIDA-X:audio_in_1$' && break; sleep 0.2; done
+  # drop any auto-connections to other devices, then wire to the iRig
+  pw-link -l | awk '/^AIDA-X:audio_out_/{p=$1;next} /^\s*\|->/{if(p) print p, $2} /^[^ ]/{p=""}' |
+    while read -r a b; do pw-link -d "$a" "$b" 2>/dev/null || true; done
+  pw-link "$IN" AIDA-X:audio_in_1 2>/dev/null || true
+  pw-link AIDA-X:audio_out_1 "$OUT:playback_FL" 2>/dev/null || true
+  pw-link AIDA-X:audio_out_2 "$OUT:playback_FR" 2>/dev/null || true
+fi
+wait $pid

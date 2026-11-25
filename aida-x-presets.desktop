@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AIDA-X Presets
+Comment=Pick an aida-x-live preset
+Exec=sh -c '"$HOME/.local/bin/aida-x-presets"'
+Icon=audio-card
+Categories=Audio;AudioVideo;Music;
+Terminal=false
