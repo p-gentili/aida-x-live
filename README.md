@@ -4,6 +4,9 @@ Run the [AIDA-X](https://github.com/AidaDSP/AIDA-X) neural amp sim so it can be
 controlled from scripts (or by an assistant) while you play, with the plugin's
 normal window still available.
 
+> Unofficial companion tool; not affiliated with or endorsed by AidaDSP.
+> AIDA-X and Carla are separate projects, installed separately.
+
 ```
 iRig HD 2 in ──► AIDA-X (LV2, hosted by Carla's engine) ──► iRig HD 2 out (L+R)
                          ▲
