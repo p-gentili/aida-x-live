@@ -3,9 +3,10 @@
 # Copyright (C) 2026 Paolo Gentili
 # Run AIDA-X (LV2) inside Carla's engine under PipeWire-JACK, wire it to the
 # audio interface, expose a control socket (see aida-x-ctl) and open the
-# preset picker.
+# AIDA-X window: the preset picker with AIDA-X's own UI embedded.
 #   aida-x-live [--headless] [--no-picker] [--preset NAME] [--model F --cab F]
-# If it's already running, this just opens the picker.
+# If it's already running, this just opens that window.
+# --no-picker: AIDA-X's own standalone window instead.
 # Override devices with AIDA_X_IN / AIDA_X_OUT (see `pw-link -o` / `pw-link -i`).
 set -u
 HERE="$(dirname "$(readlink -f "$0")")"
@@ -25,15 +26,17 @@ for a in "$@"; do
 done
 
 open_picker() {
-  # sway/GTK: a second launch of the same app id just raises the existing window
+  # A second launch of the same GTK application id just raises the existing window
   [ "$picker" = 1 ] && setsid "$HERE/aida-x-presets" >/dev/null 2>&1 &
 }
 
 if "$HERE/aida-x-ctl" presets >/dev/null 2>&1; then
-  echo "aida-x-live: already running; opening the preset picker" >&2
+  echo "aida-x-live: already running; opening the window" >&2
   open_picker; exit 0
 fi
 
+# With the picker, the daemon keeps the UI hidden until the picker embeds it.
+[ "$picker" = 1 ] && args+=(--no-ui)
 pw-jack python3 "$HERE/aida-x-carla.py" "${args[@]}" &
 pid=$!
 trap 'kill $pid 2>/dev/null' EXIT INT TERM

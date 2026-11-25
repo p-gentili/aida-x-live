@@ -6,3 +6,4 @@ Exec=sh -c '"$HOME/.local/bin/aida-x-presets"'
 Icon=audio-card
 Categories=Audio;AudioVideo;Music;
 Terminal=false
+StartupWMClass=Aida-x-presets

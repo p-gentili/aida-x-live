@@ -1,8 +1,8 @@
 # aida-x-live
 
 Run the [AIDA-X](https://github.com/AidaDSP/AIDA-X) neural amp sim so it can be
-controlled from scripts (or by an assistant) while you play, with the plugin's
-normal window still available.
+controlled from scripts (or by an assistant) while you play. Everything sits in
+one window: a preset picker on top with the plugin's own UI embedded below.
 
 > Unofficial companion tool; not affiliated with or endorsed by AidaDSP.
 > AIDA-X and Carla are separate projects, installed separately.
@@ -40,16 +40,16 @@ entry. An existing non-symlink file is moved to `*.bak` first.
 ## Run
 
 ```sh
-aida-x-live                      # plugin window + preset picker
-aida-x-live --no-picker          # without the preset picker
+aida-x-live                      # one window: preset picker + plugin UI
+aida-x-live --no-picker          # only the plugin's standalone window
 aida-x-live --headless           # no window
 aida-x-live --preset r-u-mine    # start from a saved preset
 aida-x-live --model "$AIDA_MODELS/AMP Orange Dirty.json" \
             --cab "$AIDA_MODELS/cabs/Marshall 4x12 Greenback - Allure.wav"
 ```
 
-Only one instance can run. Running `aida-x-live` again just opens the preset
-picker, and a second `aida-x-carla.py` refuses to start. Two instances would
+Only one instance can run. Running `aida-x-live` again just opens (or raises)
+the window, and a second `aida-x-carla.py` refuses to start. Two instances would
 fight over the control socket and the `AIDA-X` JACK name, so the one you hear
 and the one you control end up being different processes.
 
@@ -76,7 +76,9 @@ export AIDA_MODELS=~/AIDA-X-models
 aida-x-ctl list                 # every parameter: index, symbol, value, range
 aida-x-ctl get MASTER
 aida-x-ctl set BASS 3           # clamped to range; replies with read-back value
-aida-x-ctl ui on|off            # show/hide the plugin window
+aida-x-ctl ui on|off            # show/hide the standalone plugin window
+aida-x-ctl embed XID PID        # draw the plugin UI inside X11 window XID
+aida-x-ctl unembed              # take it out again
 aida-x-ctl custom               # plugin custom data (model / cab state)
 aida-x-ctl load json    "$AIDA_MODELS/AMP Orange Dirty.json"        # amp model
 aida-x-ctl load cabinet "$AIDA_MODELS/cabs/UK V30 4x12 SM57.wav"    # cab IR
@@ -86,23 +88,23 @@ aida-x-ctl presets
 aida-x-ctl quit
 ```
 
-For a point-and-click switcher, run `aida-x-presets` (or "AIDA-X Presets" in
-the app grid). It's a small GTK 4 window with a dropdown of presets; choosing one
-recalls it. The refresh button picks up newly saved presets. Under the dropdown
-it shows the settings to use on the guitar (pickup, volume, tone and a tip). They
-come from `<preset>.guitar.json` next to the preset:
+The window `aida-x-live` opens is `aida-x-presets` (also "AIDA-X Presets" in
+the app grid). It's a small GTK 3 window with a dropdown of presets; choosing one
+recalls it. The refresh button picks up newly saved presets (and attaches the
+plugin UI if the daemon started after the window). Under the dropdown it shows
+the settings to use on the guitar (pickup, volume, tone and a tip), and below
+that AIDA-X's own UI. The guitar settings come from `<preset>.guitar.json` next
+to the preset:
 
 ```json
 {"pickup": "bridge", "volume": "10", "tone": "10", "notes": "Too thin? Middle position."}
 ```
 
-On sway, this rule makes the picker a small sticky floating panel in the
-top-left corner (`float-corner` is a local helper; drop that part to keep sway's
-default placement):
-
-```
-for_window [app_id="local.aidax.presets"] floating enable, sticky enable, resize set 380 320, move position 0 -1000, exec ~/.local/bin/float-corner top-left 0 local.aidax.presets
-```
+The plugin UI only exists for X11, so this window runs on X11 (XWayland under a
+Wayland session) and the daemon reparents AIDA-X's UI into it (`embed`). Closing
+the window detaches the UI first; if the window dies without doing that, the
+daemon notices within half a second and detaches it itself, so the sound keeps
+going either way.
 
 Presets are Carla plugin-state files (`.carxs`) in `~/.local/state/aida-x/presets/`.
 They store absolute paths to the model and IR files. A name containing `/` is
@@ -152,6 +154,12 @@ Parameters can be given by symbol (case-insensitive) or Carla index:
 - **`MeterIn` / `MeterOut`** hold a fixed value when read through the host.
   They seem to update only when the plugin's own UI polls them. Don't use them
   to verify a change; listen instead.
+- **One window with GTK 4.** AIDA-X's UI is X11-only, and GTK 4 (and Wayland
+  in general) can't host another program's window. The picker uses GTK 3 on
+  X11 and Carla's `carla_embed_custom_ui()` (not in its Python bindings; called
+  through ctypes). The UI has to run in-process, not in a Carla UI bridge. The
+  picker must `XSync` before handing over its window id: otherwise the daemon's
+  own X connection sees `BadWindow` and AIDA-X fails to create its GL context.
 - The **standalone AIDA-X** has a JACK `events-in` MIDI port, but nothing in the
   binary suggests MIDI CC → parameter mapping.
 
@@ -160,7 +168,7 @@ Parameters can be given by symbol (case-insensitive) or Carla index:
 - `bin/aida-x-live`: starts the daemon under `pw-jack` and wires the ports
 - `bin/aida-x-carla.py`: Carla engine and socket server
 - `bin/aida-x-ctl`: socket client
-- `bin/aida-x-presets`: GTK 4 preset picker
+- `bin/aida-x-presets`: GTK 3 window: preset picker with the plugin UI embedded
 - `bin/aida-x-standalone`: the original standalone launcher, for reference
 - `install.sh`, `aida-x-live.desktop`
 
