@@ -160,3 +160,18 @@ Parameters can be given by symbol (case-insensitive) or Carla index:
 - `bin/aida-x-presets`: GTK 4 preset picker
 - `bin/aida-x-standalone`: the original standalone launcher, for reference
 - `install.sh`, `aida-x-live.desktop`
+
+## License
+
+GPL-3.0-or-later; see [LICENSE](LICENSE).
+
+The daemon imports Carla's Python bindings (`carla_backend.py`) and loads
+`libcarla_standalone2.so` into its own process, and AIDA-X runs in that same
+process. Carla is GPL-2.0-or-later and AIDA-X is GPL-3.0, so this project uses
+GPL-3.0-or-later to stay compatible with both. Neither is bundled here; they're
+installed separately.
+
+Amp models (`.json`) and cab IRs (`.wav`) aren't part of this repository. They
+come from their own authors under their own terms, so check those before sharing
+presets or files.
+

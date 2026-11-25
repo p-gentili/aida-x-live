@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Paolo Gentili
 """AIDA-X hosted in Carla's engine, controllable over a Unix socket.
 
 Commands (one per line, reply ends with a line "."):

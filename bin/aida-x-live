@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Paolo Gentili
 # Run AIDA-X (LV2) inside Carla's engine under PipeWire-JACK, wire it to the
 # audio interface, expose a control socket (see aida-x-ctl) and open the
 # preset picker.

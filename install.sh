@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Paolo Gentili
 # Symlink the scripts into ~/.local/bin and install the desktop entry.
 set -eu
 REPO="$(cd "$(dirname "$0")" && pwd)"

@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Paolo Gentili
 # Start AIDA-X via PipeWire-JACK at low latency and wire it to the iRig HD 2 if present.
 IN="alsa_input.usb-IK_Multimedia_iRig_HD_2-00.mono-fallback:capture_MONO"
 OUT="alsa_output.usb-IK_Multimedia_iRig_HD_2-00.analog-stereo"
