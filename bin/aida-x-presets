@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Paolo Gentili
-"""Tiny GTK 4 preset picker for aida-x-live: choose a preset, it's recalled,
-and the guitar-side settings for it (pickup, volume, tone, tip) are shown.
+"""The aida-x-live window: AIDA-X's own UI on top, preset picker below.
+
+Choosing a preset recalls it and shows the guitar-side settings for it
+(pickup, volume, tone, tip). AIDA-X's UI is embedded with the daemon's
+"embed XID PID" command. That UI is X11-only, so this window runs on X11
+(XWayland under a Wayland session) with GTK 3; GTK 4 can't host it.
 
 Guitar settings live next to each preset in <name>.guitar.json:
   {"pickup": "bridge", "volume": "10", "tone": "10", "notes": "..."}
@@ -11,10 +15,13 @@ import json
 import os
 import socket
 
-import gi
+os.environ["GDK_BACKEND"] = "x11"
 
-gi.require_version("Gtk", "4.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+import gi  # noqa: E402
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("GdkX11", "3.0")
+from gi.repository import GdkX11, GLib, Gtk  # noqa: E402
 
 SOCK = os.path.expanduser("~/.local/state/aida-x/carla.sock")
 PRESET_DIR = os.path.expanduser("~/.local/state/aida-x/presets")
@@ -38,71 +45,115 @@ def ctl(cmd: str) -> str:
 
 class Picker(Gtk.ApplicationWindow):
     def __init__(self, app):
-        super().__init__(application=app, title="AIDA-X Presets")
-        # Resizable on purpose: a non-resizable window can't grow when the
-        # Guitar panel appears (GTK warns "needs at least N" and clips it).
-        self.set_default_size(340, -1)
+        super().__init__(application=app, title="AIDA-X")
+        self.embedded = False
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         for side in ("top", "bottom", "start", "end"):
-            getattr(box, f"set_margin_{side}")(16)
+            getattr(top, f"set_margin_{side}")(12)
 
         row = Gtk.Box(spacing=8)
-        self.model = Gtk.StringList()
-        self.dropdown = Gtk.DropDown(model=self.model)
-        self.dropdown.set_hexpand(True)
-        self.handler = self.dropdown.connect("notify::selected", self.on_selected)
-        refresh = Gtk.Button(icon_name="view-refresh-symbolic", tooltip_text="Reload preset list")
+        self.combo = Gtk.ComboBoxText(hexpand=True)
+        self.handler = self.combo.connect("changed", self.on_selected)
+        refresh = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
+        refresh.set_tooltip_text("Reload preset list")
         refresh.connect("clicked", lambda *_: self.reload())
-        row.append(self.dropdown)
-        row.append(refresh)
+        row.pack_start(self.combo, True, True, 0)
+        row.pack_start(refresh, False, False, 0)
 
         self.status = Gtk.Label(xalign=0)
-        self.status.add_css_class("dim-label")
+        self.status.get_style_context().add_class("dim-label")
 
         # Guitar-side settings for the selected preset
-        self.guitar = Gtk.Grid(column_spacing=12, row_spacing=4)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=4)
         self.fields = {}
         for r, key in enumerate(("pickup", "volume", "tone")):
             name = Gtk.Label(label=key.capitalize(), xalign=0)
-            name.add_css_class("dim-label")
+            name.get_style_context().add_class("dim-label")
             value = Gtk.Label(xalign=0, selectable=True)
-            self.guitar.attach(name, 0, r, 1, 1)
-            self.guitar.attach(value, 1, r, 1, 1)
+            grid.attach(name, 0, r, 1, 1)
+            grid.attach(value, 1, r, 1, 1)
             self.fields[key] = value
-        self.notes = Gtk.Label(xalign=0, wrap=True, max_width_chars=40, selectable=True)
-        self.guitar.attach(self.notes, 0, 3, 2, 1)
-        frame = Gtk.Frame(label="Guitar")
-        self.guitar.set_margin_top(6)
-        self.guitar.set_margin_bottom(8)
-        self.guitar.set_margin_start(10)
-        self.guitar.set_margin_end(10)
-        frame.set_child(self.guitar)
-        self.frame = frame
-        frame.set_visible(False)
+        self.notes = Gtk.Label(xalign=0, wrap=True, max_width_chars=60, selectable=True)
+        self.notes.set_no_show_all(True)
+        grid.attach(self.notes, 0, 3, 2, 1)
+        for side in ("top", "bottom", "start", "end"):
+            getattr(grid, f"set_margin_{side}")(8)
+        self.frame = Gtk.Frame(label="Guitar")
+        self.frame.add(grid)
+        self.frame.set_no_show_all(True)
+        grid.show_all()
 
-        box.append(row)
-        box.append(frame)
-        box.append(self.status)
-        self.set_child(box)
+        top.pack_start(row, False, False, 0)
+        top.pack_start(self.frame, False, False, 0)
+        top.pack_start(self.status, False, False, 0)
+
+        # AIDA-X's UI is reparented into this widget's native X window.
+        self.area = Gtk.DrawingArea(halign=Gtk.Align.CENTER)
+        self.area.set_no_show_all(True)
+
+        box.pack_start(self.area, False, False, 0)
+        box.pack_start(top, False, False, 0)
+        self.add(box)
+        self.connect("delete-event", self.on_close)
+        self.show_all()
         self.reload()
 
     def reload(self):
         try:
             names = [n for n in ctl("presets").splitlines() if n and n != "(none)"]
-            msg = f"{len(names)} presets"
+            msg, running = f"{len(names)} presets", True
         except OSError:
-            names, msg = [], "aida-x-live isn't running"
-        with self.dropdown.handler_block(self.handler):
-            self.model.splice(0, self.model.get_n_items(), [PLACEHOLDER, *names])
-            self.dropdown.set_selected(0)
+            names, msg, running = [], "aida-x-live isn't running", False
+        with self.combo.handler_block(self.handler):
+            self.combo.remove_all()
+            for n in (PLACEHOLDER, *names):
+                self.combo.append_text(n)
+            self.combo.set_active(0)
         self.status.set_text(msg)
+        if running and not self.embedded:
+            self.embed()
 
-    def on_selected(self, dropdown, _pspec):
-        i = dropdown.get_selected()
-        if i in (0, Gtk.INVALID_LIST_POSITION):
+    def embed(self):
+        """Ask the daemon to draw AIDA-X's UI inside self.area."""
+        self.area.show()
+        self.area.realize()
+        win = self.area.get_window()
+        if win is None or not win.ensure_native():
+            self.area.hide()
+            self.status.set_text("can't embed: no native window")
             return
-        name = self.model.get_string(i)
+        # The daemon talks to the X server on its own connection: our window
+        # must exist there before it gets the id, or it fails with BadWindow.
+        self.area.get_display().sync()
+        try:
+            reply = ctl(f"embed {win.get_xid()} {os.getpid()}")
+        except OSError as e:
+            reply = f"error: {e}"
+        if not reply.startswith("ok "):
+            self.area.hide()
+            self.status.set_text(reply)
+            return
+        self.embedded = True
+        child = GdkX11.X11Window.foreign_new_for_display(
+            self.area.get_display(), int(reply.split()[1]))
+        if child is not None:
+            self.area.set_size_request(child.get_width(), child.get_height())
+
+    def on_close(self, *_):
+        if self.embedded:
+            try:
+                ctl("unembed")
+            except OSError:
+                pass
+            self.embedded = False
+        return False  # let the window close
+
+    def on_selected(self, combo):
+        if combo.get_active() <= 0:
+            return
+        name = combo.get_active_text()
         self.show_guitar(name)
         self.status.set_text(f"loading {name}…")
         # let the label repaint before the (short) blocking call
@@ -113,14 +164,14 @@ class Picker(Gtk.ApplicationWindow):
             with open(os.path.join(PRESET_DIR, name + ".guitar.json")) as f:
                 g = json.load(f)
         except (OSError, ValueError):
-            self.frame.set_visible(False)
+            self.frame.hide()
             return
         self.fields["pickup"].set_markup(f"<b>{GLib.markup_escape_text(str(g.get('pickup', '?')).upper())}</b>")
         self.fields["volume"].set_text(str(g.get("volume", "—")))
         self.fields["tone"].set_text(str(g.get("tone", "—")))
         self.notes.set_text(g.get("notes", ""))
         self.notes.set_visible(bool(g.get("notes")))
-        self.frame.set_visible(True)
+        self.frame.show()
 
     def recall(self, name):
         try:
@@ -131,6 +182,14 @@ class Picker(Gtk.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
 
+GLib.set_prgname("aida-x-presets")  # X11 WM_CLASS, for window-manager rules
 app = Gtk.Application(application_id="local.aidax.presets")
-app.connect("activate", lambda a: Picker(a).present())
+
+
+def activate(a):
+    win = a.get_active_window()
+    (win or Picker(a)).present()
+
+
+app.connect("activate", activate)
 app.run(None)

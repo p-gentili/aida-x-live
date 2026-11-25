@@ -8,6 +8,10 @@ Commands (one per line, reply ends with a line "."):
   get SYM              current value of a parameter (symbol or Carla index)
   set SYM VAL          set parameter, replies with read-back value
   ui on|off            show/hide AIDA-X's own window (load models/IRs there)
+  embed XID PID        put AIDA-X's UI inside X11 window XID (owned by process
+                       PID); replies "ok CHILD_XID". Undone by "unembed", or
+                       automatically when PID exits.
+  unembed              take the UI out of the embedding window again
   custom               dump plugin custom data (model / cab paths live here)
   load json|cabinet P  load an amp model (.json) or cab IR (.wav)
   save NAME            save model, cab and knobs as a preset
@@ -15,14 +19,15 @@ Commands (one per line, reply ends with a line "."):
   presets              list presets
   quit                 stop
 Client:  aida-x-ctl set BASS 3
-Startup flags: --headless, --preset NAME, --model FILE, --cab FILE
+Startup flags: --headless, --no-ui, --preset NAME, --model FILE, --cab FILE
 
 Model/cab loading goes through a plugin-state round trip (save state, edit the
 path entries, load it back). Carla only hands paths to AIDA-X through its state
 restore; set_custom_data() with either atom#Path or Carla's own path type is
 stored or dropped without the plugin ever seeing it.
 """
-import os, sys, re, glob, socket, select, signal, tempfile
+import os, sys, re, glob, socket, select, signal, tempfile, time
+import ctypes
 from xml.sax.saxutils import escape
 
 sys.path.insert(0, "/usr/share/carla")
@@ -59,6 +64,31 @@ host.set_engine_option(cb.ENGINE_OPTION_PATH_RESOURCES, 0, "/usr/lib/carla/resou
 host.set_engine_option(cb.ENGINE_OPTION_PROCESS_MODE, cb.ENGINE_PROCESS_MODE_MULTIPLE_CLIENTS, "")
 host.set_engine_option(cb.ENGINE_OPTION_PLUGIN_PATH, cb.PLUGIN_LV2, LV2_PATH)
 host.set_engine_option(cb.ENGINE_OPTION_OSC_ENABLED, 0, "")
+# Run the plugin UI in this process: Carla can only embed an in-process UI.
+host.set_engine_option(cb.ENGINE_OPTION_PREFER_UI_BRIDGES, 0, "")
+
+# An embedded UI lives inside someone else's window. If that window vanishes
+# (picker killed), the UI's next X call fails, and Xlib's default handler
+# would exit() this process and stop the sound. Log and carry on instead.
+_XErrorHandler = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p)
+class _XErrorEvent(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_int), ("display", ctypes.c_void_p),
+                ("resourceid", ctypes.c_ulong), ("serial", ctypes.c_ulong),
+                ("error_code", ctypes.c_ubyte), ("request_code", ctypes.c_ubyte),
+                ("minor_code", ctypes.c_ubyte)]
+@_XErrorHandler
+def _x_error(_display, event):
+    e = ctypes.cast(event, ctypes.POINTER(_XErrorEvent)).contents
+    print(f"aida-x-carla: X error {e.error_code} (request {e.request_code}.{e.minor_code}, "
+          f"resource {e.resourceid:#x}) ignored", file=sys.stderr, flush=True)
+    return 0
+try:
+    ctypes.CDLL("libX11.so.6").XSetErrorHandler(_x_error)
+except OSError:
+    pass  # no libX11: nothing to embed into anyway
+host.lib.carla_embed_custom_ui.argtypes = (ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p)
+host.lib.carla_embed_custom_ui.restype = ctypes.c_void_p
+embedded_by = None  # PID of the process whose window hosts the UI
 
 if not host.engine_init("JACK", "Carla-AIDA-X"):
     sys.exit("engine_init failed: " + host.get_last_error())
@@ -135,8 +165,27 @@ if flag("--preset"):
 startup = {k: os.path.abspath(flag(f)) for f, k in (("--model", "json"), ("--cab", "cabinet")) if flag(f)}
 if startup:
     load_paths(startup)
-if "--headless" not in argv:
+if "--headless" not in argv and "--no-ui" not in argv:
     host.show_custom_ui(PID, True)
+
+
+def embed(xid, pid):
+    global embedded_by
+    if pid <= 0:
+        return "error: PID must be a process id"
+    host.show_custom_ui(PID, False)  # drop the standalone window / old parent
+    child = host.lib.carla_embed_custom_ui(host.handle, PID, xid)
+    if not child:
+        return "error: embedding failed: " + host.get_last_error()
+    embedded_by = pid
+    return f"ok {child}"
+
+
+def unembed():
+    global embedded_by
+    host.show_custom_ui(PID, False)
+    embedded_by = None
+    return "ok"
 
 
 def params():
@@ -181,8 +230,14 @@ def handle(line):
         host.set_parameter_value(PID, i, v)
         return f"{params()[i][0]} = {host.get_current_parameter_value(PID, i):g}"
     if c == "ui":
+        if embedded_by is not None:
+            return "error: embedded (close the picker first)"
         host.show_custom_ui(PID, a[1:2] != ["off"])
         return "ok"
+    if c == "embed":
+        return embed(int(a[1], 0), int(a[2]))
+    if c == "unembed":
+        return unembed()
     if c == "custom":
         rows = []
         for j in range(host.get_custom_data_count(PID)):
@@ -220,28 +275,40 @@ srv.listen(4)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 print("ready", flush=True)
 
+next_check = 0.0
 try:
     while host.is_engine_running():
         r, _, _ = select.select([srv], [], [], 0.03)
         host.engine_idle()
+        if embedded_by is not None and time.monotonic() >= next_check:
+            next_check = time.monotonic() + 0.5
+            try:
+                os.kill(embedded_by, 0)
+            except OSError:  # gone, or the PID now belongs to someone else
+                print("aida-x-carla: embedding window gone, detaching UI", file=sys.stderr, flush=True)
+                unembed()
         if r:
             conn, _ = srv.accept()
-            with conn:
-                conn.settimeout(2)
-                buf = b""
-                while not buf.endswith(b"\n"):
-                    chunk = conn.recv(4096)
-                    if not chunk:
+            # A client that stalls or hangs up mid-request must not stop the engine.
+            try:
+                with conn:
+                    conn.settimeout(2)
+                    buf = b""
+                    while not buf.endswith(b"\n"):
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    try:
+                        reply = handle(buf.decode().strip())
+                    except SystemExit:
+                        conn.sendall(b"bye\n.\n")
                         break
-                    buf += chunk
-                try:
-                    reply = handle(buf.decode().strip())
-                except SystemExit:
-                    conn.sendall(b"bye\n.\n")
-                    break
-                except Exception as e:  # report, keep running
-                    reply = f"error: {e}"
-                conn.sendall((reply + "\n.\n").encode())
+                    except Exception as e:  # report, keep running
+                        reply = f"error: {e}"
+                    conn.sendall((reply + "\n.\n").encode())
+            except OSError as e:
+                print(f"aida-x-carla: client dropped: {e}", file=sys.stderr, flush=True)
 finally:
     host.remove_all_plugins()
     host.engine_close()
