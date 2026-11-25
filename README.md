@@ -2,7 +2,7 @@
 
 Run the [AIDA-X](https://github.com/AidaDSP/AIDA-X) neural amp sim so it can be
 controlled from scripts (or by an assistant) while you play. Everything sits in
-one window: a preset picker on top with the plugin's own UI embedded below.
+one window: the plugin's own UI with a preset picker below it.
 
 > Unofficial companion tool; not affiliated with or endorsed by AidaDSP.
 > AIDA-X and Carla are separate projects, installed separately.
@@ -92,8 +92,8 @@ The window `aida-x-live` opens is `aida-x-presets` (also "AIDA-X Presets" in
 the app grid). It's a small GTK 3 window with a dropdown of presets; choosing one
 recalls it. The refresh button picks up newly saved presets (and attaches the
 plugin UI if the daemon started after the window). Under the dropdown it shows
-the settings to use on the guitar (pickup, volume, tone and a tip), and below
-that AIDA-X's own UI. The guitar settings come from `<preset>.guitar.json` next
+the settings to use on the guitar (pickup, volume, tone and a tip). AIDA-X's
+own UI sits above all that. The guitar settings come from `<preset>.guitar.json` next
 to the preset:
 
 ```json

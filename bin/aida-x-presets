@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Paolo Gentili
-"""The aida-x-live window: preset picker on top, AIDA-X's own UI below.
+"""The aida-x-live window: AIDA-X's own UI on top, preset picker below.
 
 Choosing a preset recalls it and shows the guitar-side settings for it
 (pickup, volume, tone, tip). AIDA-X's UI is embedded with the daemon's
@@ -93,8 +93,8 @@ class Picker(Gtk.ApplicationWindow):
         self.area = Gtk.DrawingArea(halign=Gtk.Align.CENTER)
         self.area.set_no_show_all(True)
 
-        box.pack_start(top, False, False, 0)
         box.pack_start(self.area, False, False, 0)
+        box.pack_start(top, False, False, 0)
         self.add(box)
         self.connect("delete-event", self.on_close)
         self.show_all()
@@ -103,16 +103,16 @@ class Picker(Gtk.ApplicationWindow):
     def reload(self):
         try:
             names = [n for n in ctl("presets").splitlines() if n and n != "(none)"]
-            msg = f"{len(names)} presets"
+            msg, running = f"{len(names)} presets", True
         except OSError:
-            names, msg = [], "aida-x-live isn't running"
+            names, msg, running = [], "aida-x-live isn't running", False
         with self.combo.handler_block(self.handler):
             self.combo.remove_all()
             for n in (PLACEHOLDER, *names):
                 self.combo.append_text(n)
             self.combo.set_active(0)
         self.status.set_text(msg)
-        if names and not self.embedded:
+        if running and not self.embedded:
             self.embed()
 
     def embed(self):

@@ -171,6 +171,8 @@ if "--headless" not in argv and "--no-ui" not in argv:
 
 def embed(xid, pid):
     global embedded_by
+    if pid <= 0:
+        return "error: PID must be a process id"
     host.show_custom_ui(PID, False)  # drop the standalone window / old parent
     child = host.lib.carla_embed_custom_ui(host.handle, PID, xid)
     if not child:
@@ -282,27 +284,31 @@ try:
             next_check = time.monotonic() + 0.5
             try:
                 os.kill(embedded_by, 0)
-            except ProcessLookupError:
+            except OSError:  # gone, or the PID now belongs to someone else
                 print("aida-x-carla: embedding window gone, detaching UI", file=sys.stderr, flush=True)
                 unembed()
         if r:
             conn, _ = srv.accept()
-            with conn:
-                conn.settimeout(2)
-                buf = b""
-                while not buf.endswith(b"\n"):
-                    chunk = conn.recv(4096)
-                    if not chunk:
+            # A client that stalls or hangs up mid-request must not stop the engine.
+            try:
+                with conn:
+                    conn.settimeout(2)
+                    buf = b""
+                    while not buf.endswith(b"\n"):
+                        chunk = conn.recv(4096)
+                        if not chunk:
+                            break
+                        buf += chunk
+                    try:
+                        reply = handle(buf.decode().strip())
+                    except SystemExit:
+                        conn.sendall(b"bye\n.\n")
                         break
-                    buf += chunk
-                try:
-                    reply = handle(buf.decode().strip())
-                except SystemExit:
-                    conn.sendall(b"bye\n.\n")
-                    break
-                except Exception as e:  # report, keep running
-                    reply = f"error: {e}"
-                conn.sendall((reply + "\n.\n").encode())
+                    except Exception as e:  # report, keep running
+                        reply = f"error: {e}"
+                    conn.sendall((reply + "\n.\n").encode())
+            except OSError as e:
+                print(f"aida-x-carla: client dropped: {e}", file=sys.stderr, flush=True)
 finally:
     host.remove_all_plugins()
     host.engine_close()
